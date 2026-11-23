@@ -1,0 +1,8 @@
+KY 股票 Agent 0.0.1
+
+Derived from TauricResearch/TradingAgents, upstream version 0.7.1,
+commit 9fa1196fffbcfd9de5146d2dd2869df84ab99838, under Apache License 2.0.
+This distribution includes local modifications to market data validation,
+intraday research, portfolio checks, reporting and the CLI. It also includes
+the local quantitative terminal, research tools and development board.
+Upstream attribution and the original license are retained.

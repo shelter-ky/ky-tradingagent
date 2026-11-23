@@ -1,0 +1,72 @@
+# Modified for KY TradingAgent 0.0.1 (2026-11-23).
+from tradingagents.agents.context import (
+    get_instrument_context_from_state,
+    get_language_instruction,
+    opponent_argument_or_opening,
+    report_or_absent,
+)
+from tradingagents.instruments import profile_from_state
+
+
+def create_bull_researcher(llm):
+    def bull_node(state) -> dict:
+        investment_debate_state = state["investment_debate_state"]
+        history = investment_debate_state.get("history", "")
+        bull_history = investment_debate_state.get("bull_history", "")
+
+        current_response = opponent_argument_or_opening(
+            investment_debate_state.get("current_response", ""), "bear analyst"
+        )
+        market_research_report = report_or_absent(state["market_report"], "market")
+        sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
+        news_report = report_or_absent(state["news_report"], "news")
+        fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
+        instrument_context = get_instrument_context_from_state(state)
+        asset_type = state.get("asset_type", "stock")
+        is_etf = profile_from_state(state).kind == "etf"
+        target_label = "ETF" if is_etf else "stock" if asset_type == "stock" else "asset"
+        fundamentals_label = (
+            "ETF exposure and constituent research report" if is_etf else "Company fundamentals report"
+            if asset_type == "stock"
+            else "Asset fundamentals report (may be unavailable for crypto)"
+        )
+
+        growth_focus = ("Underlying opportunity: assess the index trend and constituent earnings/catalysts from verified data, not a fund's corporate revenue."
+                        if is_etf else "Growth Potential: Highlight the company's market opportunities, revenue projections, and scalability.")
+        advantage_focus = ("Fund suitability: assess verified liquidity/tracking and suitability of daily leverage for the intended holding window; do not claim a fund has operating-company competitive advantages."
+                           if is_etf else "Competitive Advantages: Emphasize factors like unique products, strong branding, or dominant market positioning.")
+        prompt = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+
+Key points to focus on:
+- {growth_focus}
+- {advantage_focus}
+- Positive Indicators: Use financial health, industry trends, and recent positive news as evidence.
+- Bear Counterpoints: Critically analyze the bear argument with specific data and sound reasoning, addressing concerns thoroughly and showing why the bull perspective holds stronger merit.
+- Engagement: Present your argument in a conversational style, engaging directly with the bear analyst's points and debating effectively rather than just listing data.
+
+Resources available:
+{instrument_context}
+Market research report: {market_research_report}
+Social media sentiment report: {sentiment_report}
+Latest world affairs news: {news_report}
+{fundamentals_label}: {fundamentals_report}
+Conversation history of the debate: {history}
+Last bear argument: {current_response}
+Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.
+""" + get_language_instruction()
+
+        response = llm.invoke(prompt)
+
+        argument = f"Bull Analyst: {response.content}"
+
+        new_investment_debate_state = {
+            "history": history + "\n" + argument,
+            "bull_history": bull_history + "\n" + argument,
+            "bear_history": investment_debate_state.get("bear_history", ""),
+            "current_response": argument,
+            "count": investment_debate_state["count"] + 1,
+        }
+
+        return {"investment_debate_state": new_investment_debate_state}
+
+    return bull_node
