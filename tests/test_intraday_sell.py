@@ -68,7 +68,9 @@ def test_confirmed_risk_only_and_episode_does_not_restart_or_leak():
     assert unknown["cohort"]=="all" and unknown["anchor"] is None
     state["end"]+=pd.Timedelta(minutes=1)
     state["skew"]=-1
-    assert eng.step()["analysis"]["sell_impact"]["status"]=="UNAVAILABLE"
+    mismatch = eng.step()
+    assert mismatch["status"] == "UNAVAILABLE" and mismatch["action"] == "WAIT"
+    assert "analysis" not in mismatch
 
 
 def test_history_bounds_and_partial_session_and_other_symbols():

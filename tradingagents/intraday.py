@@ -23,6 +23,7 @@ from tradingagents.intraday_analysis import technical_action as technical_action
 from tradingagents.intraday_sell import episode_start, sell_impact, sell_lines
 from tradingagents.llm_clients.factory import create_tier_client
 from tradingagents.risk import RiskLimits
+from tradingagents.dataflows.intraday import paired_snapshots
 
 ACTION_LABELS = {"WAIT": "等待", "WATCH_LONG": "观察买入条件", "WATCH_RISK": "观察减仓／退出条件（如有持仓）"}
 LIMITATIONS = [
@@ -144,15 +145,20 @@ class IntradayEngine:
             self.reset_observations()
             return result
         try:
-            snaps = [self.fetch(self.ticker)]
             proxy = self.profile.research_proxy
-            if proxy and proxy != self.ticker:
-                snaps.append(self.fetch(proxy))
+            if proxy and proxy != self.ticker and self.fetch is fetch_snapshot:
+                snaps = paired_snapshots(self.ticker, proxy, self.clock)
+            elif proxy and proxy != self.ticker and callable(getattr(type(self.fetch),"paired",None)):
+                snaps = self.fetch.paired(self.ticker, proxy)
+            else:
+                snaps = [self.fetch(self.ticker)]
+                if proxy and proxy != self.ticker:
+                    snaps.append(self.fetch(proxy))
             result["snapshots"] = [s.to_dict() for s in snaps]
             problem = freshness_error(snaps, self.clock())
             if problem:
                 raise IntradayDataError(problem)
-            if len(snaps) > 1 and abs((aware_utc(snaps[0].bar_end) - aware_utc(snaps[1].bar_end)).total_seconds()) > 60:
+            if len(snaps) > 1 and aware_utc(snaps[0].bar_end) != aware_utc(snaps[1].bar_end):
                 raise IntradayDataError("标的与 QQQ 分钟线不同步，等待同步数据")
             ends = {s.ticker: aware_utc(s.bar_end) for s in snaps}
             for ticker, end in ends.items():
@@ -244,7 +250,7 @@ def render_report(result, now=None, *, compact=False):
         age = max(0, (now - aware_utc(s["bar_end"])).total_seconds())
         stamp = aware_utc(s["bar_end"]).tz_convert("America/New_York").strftime("%H:%M:%S")
         lines.append(f"- {s['ticker']}：完整分钟线收盘 {s['price']:.4f}；美东结束时间 {stamp}；数据距今 {age:.0f} 秒。")
-        if not (compact and analysis):
+        if "vwap" in s and not (compact and analysis):
             lines.append(f"  VWAP {s['vwap']:.4f}；EMA9 {s['ema9']:.4f}；EMA20 {s['ema20']:.4f}；5 分钟动量 {s['momentum5_pct']:+.3f}%。")
     if result.get("levels") and not expired and result["status"] == "READY":
         lv = result["levels"]
@@ -253,6 +259,17 @@ def render_report(result, now=None, *, compact=False):
                   "这些是观察位，不是委托价或保证有效的止损价；下一轮重新计算。"]
     if result.get("model") and not expired:
         lines += ["", "模型提示：" + "；".join(result["model"]["risks"])]
+    if result.get("strategy_id")=="opening0935-v1":
+        size = result["sizing"]
+        lines += ["", "仓位核对："+size["reason"]]
+        allocation=size.get("validated_allocation")
+        if allocation and not expired and result["status"]=="READY":
+            lines.append(f"按快照核对：持有 {size['held']:g} 股，可卖 {size['available']:g} 股，"
+                         f"变动 {allocation['delta_quantity']:+g} 股，目标 {allocation['target_quantity']:g} 股。")
+    if "forward_events" in result:
+        lines += ["", f"前向模拟（本地最近 {len(result['forward_events'])} 次减仓记录，详见交易台）。"]
+    if result.get("strategy_id")=="opening0935-v1":
+        return "\n".join(lines)+"\n"
     if compact:
         lines += ["", f"数量：不生成（{result['sizing']['status']}）；无券商下单功能。",
                   "仅分钟技术观察；新闻／宏观／盘口未核验。完整结果见 latest.md。"]

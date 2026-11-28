@@ -1,4 +1,4 @@
-# Modified for KY TradingAgent 0.0.1 (2026-11-23).
+# Modified for KY TradingAgent 0.0.2 (2026-11-28).
 """The caller's book, as the decision agents see it.
 
 Optional input to a run: what is held, at what average price, and how much cash
@@ -18,8 +18,9 @@ import hashlib
 import json
 from datetime import date
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from tradingagents.dataflows.symbols import normalize_symbol
 
@@ -29,6 +30,7 @@ class Position(BaseModel):
 
     ticker: str = Field(description="Instrument symbol, e.g. AAPL")
     quantity: float = Field(description="Signed units held; negative is short")
+    available_quantity: float | None = Field(default=None, ge=0, strict=True)
     average_price: float | None = Field(default=None, description="Average entry price per unit")
 
     @field_validator("quantity", "average_price", mode="before")
@@ -65,6 +67,8 @@ class PortfolioContext(BaseModel):
     positions: list[Position] = Field(default_factory=list)
     net_asset_value: float | None = Field(default=None, gt=0, description="Caller-reported net liquidation value, not cost basis")
     as_of_date: date | None = None
+    as_of_time: AwareDatetime | None = None
+    intraday_stop_prices: dict[str, Annotated[float, Field(gt=0, strict=True)]] = Field(default_factory=dict)
     reference_quotes: list[ReferenceQuote] = Field(default_factory=list)
 
     @field_validator("cash", "net_asset_value", mode="before")
@@ -114,7 +118,16 @@ class PortfolioContext(BaseModel):
 
     def fingerprint(self) -> str:
         """Stable digest of the book, so a changed one cannot resume a stale run."""
-        return hashlib.sha256(self.model_dump_json().encode()).hexdigest()[:12]
+        # Preserve the serialized shape of date-only books from older checkpoints.
+        exclude = {}
+        if self.as_of_time is None:
+            exclude["as_of_time"] = True
+        if not self.intraday_stop_prices:
+            exclude["intraday_stop_prices"] = True
+        absent = {i: {"available_quantity"} for i, p in enumerate(self.positions) if p.available_quantity is None}
+        if absent:
+            exclude["positions"] = absent
+        return hashlib.sha256(self.model_dump_json(exclude=exclude).encode()).hexdigest()[:12]
 
 
 def load_portfolio(path: str | Path) -> PortfolioContext:

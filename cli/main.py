@@ -1,4 +1,4 @@
-# Modified for KY TradingAgent 0.0.1 (2026-11-23).
+# Modified for KY TradingAgent 0.0.2 (2026-11-28).
 import sys
 from enum import StrEnum
 from typing import Annotated
@@ -72,7 +72,7 @@ def analyze(
         None, "--html/--no-html",
         help="Save the report as one HTML page too, complete_report.html, without asking (default: yes)",
     ),
-    mode: str = typer.Option(None, "--mode", help="analysis or intraday; a terminal startup offers both modes"),
+    mode: str = typer.Option(None, "--mode", help="analysis, intraday (minute trend), or opening0935 (TQQQ/QQQ rule)"),
     interval: int = typer.Option(60, "--interval", min=60, max=3600, help="Intraday refresh delay in seconds (60-3600)"),
     once: bool = typer.Option(False, "--once", help="In intraday mode, take one snapshot and exit"),
 ):
@@ -106,13 +106,13 @@ def analyze(
                 raise typer.Exit(code=1) from None
         from cli.intraday import choose_mode, run_intraday
         selected_mode = choose_mode(mode)
-        if selected_mode == "intraday":
+        if selected_mode in {"intraday", "opening0935"}:
             if date is not None or analysts is not None:
                 console.print("[red]盘中模式使用当前美东交易日，无需 --date 或 --analysts；历史分析请选择 --mode analysis。[/red]")
                 raise typer.Exit(code=1)
             run_intraday(flags=flags, portfolio=portfolio_context, portfolio_path=portfolio,
                          risk_limits=overrides.get("risk_limits"), risk_limits_path=risk_limits,
-                         interval=interval, once=once)
+                         interval=interval, once=once, strategy=selected_mode)
         else:
             if once:
                 console.print("[red]--once 适用于 --mode intraday。[/red]")

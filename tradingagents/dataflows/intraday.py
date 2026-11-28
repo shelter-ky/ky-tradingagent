@@ -68,7 +68,7 @@ class MinuteSnapshot:
         return asdict(self)
 
 
-def snapshot_from_bars(ticker, frame, now):
+def completed_minutes(ticker, frame, now, minimum=MIN_BARS):
     """Reject malformed/gapped sessions, stale tails and unknown time zones.
 
     No interpolation, forward filling, using an unfinished candle, or moving
@@ -99,8 +99,8 @@ def snapshot_from_bars(ticker, frame, now):
     # Exclude pre/post-market and the active (incomplete) minute.
     data = data.loc[(data.index >= start) & (data.index < end)
                     & (data.index + pd.Timedelta(minutes=1) <= now)].sort_index()
-    if len(data) < MIN_BARS:
-        raise IntradayDataError("本交易日已完成分钟线不足 21 根，等待指标形成")
+    if len(data) < minimum:
+        raise IntradayDataError(f"本交易日已完成分钟线不足 {minimum} 根，等待指标形成")
     values = data.apply(pd.to_numeric, errors="coerce")
     if not all(math.isfinite(float(v)) for v in values.to_numpy().flat):
         raise IntradayDataError("分钟行情含无效数值")
@@ -118,6 +118,14 @@ def snapshot_from_bars(ticker, frame, now):
     volume = float(values.Volume.sum())
     if volume <= 0:
         raise IntradayDataError("本交易日没有有效成交量")
+    return values
+
+
+def snapshot_from_bars(ticker, frame, now):
+    symbol, now = normalize_symbol(ticker), aware_utc(now)
+    values = completed_minutes(symbol, frame, now)
+    volume = float(values.Volume.sum())
+    bar_end = values.index[-1] + pd.Timedelta(minutes=1)
     typical = (values.High + values.Low + values.Close) / 3
     snapshot = MinuteSnapshot(
         ticker=symbol, bar_start=values.index[-1].isoformat(), bar_end=bar_end.isoformat(),
@@ -135,12 +143,12 @@ def snapshot_from_bars(ticker, frame, now):
     return snapshot
 
 
-def fetch_snapshot(ticker, *, clock=utc_now):
+def fetch_regular_bars(ticker, *, period="1d"):
     symbol = normalize_symbol(ticker)
     if not is_us_equity(symbol):
         raise IntradayDataError("盘中模式当前只支持美股／美股 ETF 普通代码")
     obj = yf.Ticker(symbol)
-    frame = obj.history(period="1d", interval="1m", prepost=False, actions=False,
+    frame = obj.history(period=period, interval="1m", prepost=False, actions=False,
                         auto_adjust=False, back_adjust=False, repair=False,
                         keepna=True, timeout=10)
     meta = obj.history_metadata
@@ -148,7 +156,45 @@ def fetch_snapshot(ticker, *, clock=utc_now):
             or meta.get("exchangeTimezoneName") != NY_TZ
             or meta.get("instrumentType") not in {"EQUITY", "ETF"}):
         raise IntradayDataError("无法核实代码、USD 币种及美股品种身份")
-    return snapshot_from_bars(symbol, frame, clock())
+    return frame
+
+
+def fetch_snapshot(ticker, *, clock=utc_now):
+    return snapshot_from_bars(ticker, fetch_regular_bars(ticker), clock())
+
+
+def paired_snapshots(symbol, proxy, clock=utc_now):
+    frames = {ticker: fetch_regular_bars(ticker) for ticker in (symbol, proxy)}
+    return snapshots_from_pair(frames, clock())
+
+
+def snapshots_from_pair(frames, now):
+    now = aware_utc(now)
+    try:
+        latest = [snapshot_from_bars(t, frame, now) for t, frame in frames.items()]
+    except IntradayDataError as exc:
+        stamps = []
+        for ticker, frame in frames.items():
+            label = "未知"
+            if isinstance(frame, pd.DataFrame) and isinstance(frame.index, pd.DatetimeIndex) and frame.index.tz is not None:
+                ends = frame.index + pd.Timedelta(minutes=1)
+                finished = ends[ends <= now]
+                if len(finished):
+                    label = finished.max().tz_convert(NY_TZ).strftime("%m-%d %H:%M")
+            stamps.append(f"{ticker} {label}")
+        raise IntradayDataError(f"{exc}；行情时间（美东）：{' / '.join(stamps)}") from exc
+    ends = [aware_utc(s.bar_end) for s in latest]
+    if ends[0] == ends[1]:
+        return latest
+    # Recalculate every indicator using only information through the common bar.
+    cutoff = min(ends)
+    aligned = []
+    for snap, end in zip(latest, ends, strict=True):
+        if end != cutoff:
+            frame = frames[snap.ticker]
+            snap = snapshot_from_bars(snap.ticker, frame.loc[frame.index < cutoff], now)
+        aligned.append(snap)
+    return aligned
 
 
 def freshness_error(snapshots, now):

@@ -18,14 +18,17 @@
 <div class="paging"><span id="orderCount"></span><div><button id="newer">上一页</button><button id="older">下一页</button></div></div></section>
 <p class="foot">每个策略独立使用 7,000 美元，整股成交，每单 5 美元。净值包含应得分红，回撤从账户历史高点计算。成交时间均为美东时间。</p></section>
 <section id="signals" hidden><div class="heading"><div><h1>盘中分析与决策</h1><p>查看同一轮行情的盘中信号、卖出风险和仓位验证。</p></div></div>
+<label class="inline">观察策略<select id="signalStrategy"><option value="intraday">分钟趋势</option><option value="opening0935">09:35 VXN 分批减仓</option></select></label>
 <section class="panel"><div class="panelhead"><h2 id="signalStatus">等待信号</h2><label class="inline">标的<select id="signalSymbol"><option>TQQQ</option><option>QQQ</option></select></label></div>
 <p id="signalSource"></p><p id="signalReason" aria-live="polite"></p><dl id="signalDetails"></dl>
-<div class="tablewrap"><table><thead><tr><th>标的</th><th>分钟收盘价</th><th>成交量加权均价</th><th>EMA9</th><th>EMA20</th><th>5分钟动量</th></tr></thead><tbody id="signalsTable"></tbody></table></div></section>
+<div class="tablewrap"><table><thead><tr><th>标的</th><th>分钟结束（美东）</th><th>分钟收盘价</th><th>成交量加权均价</th><th>EMA9</th><th>EMA20</th><th>5分钟动量</th></tr></thead><tbody id="signalsTable"></tbody></table></div></section>
 <div class="decision-branches"><section class="panel" aria-labelledby="sellHeading"><div class="panelhead"><h2 id="sellHeading">卖出风险</h2><span class="badge pale" id="sellStatus">等待报告</span></div>
 <p id="sellNote"></p><p id="preNote" hidden></p>
 <div class="tablewrap" id="sellHistory" hidden><table><caption>历史上卖出后持现金，相对继续持有的美元差额</caption><thead><tr><th>观察至</th><th>样本次数</th><th>下跌时平均少亏</th><th>反弹时平均少赚</th><th>平均净差</th><th>卖出占优</th></tr></thead><tbody id="sellRows"></tbody></table></div></section>
 <section class="panel" aria-labelledby="sizingHeading"><div class="panelhead"><h2 id="sizingHeading">仓位验证</h2><span class="badge pale" id="sizingStatus">等待报告</span></div>
 <p id="sizingNote"></p><dl id="sizingRows"></dl></section></div>
-<p class="foot">运行股票 Agent 的「盘中分析与实时决策」后，本地启动版每 10 秒检查一次报告。直接打开网页时，可手动读取该次运行目录的 latest.json。</p><div class="import"><label>读取本地信号文件<input type="file" id="signalFile" accept=".json,application/json"></label><button id="resume">返回自动读取</button></div></section>
+<section class="panel"><h2>前向模拟减仓账本</h2><p>最近 20 次。每次独立参考 7,000 美元和规则前仓位，分钟趋势以满仓暴露测算。按提示发布后的下一完整分钟开盘价模拟成交，每单 5 美元。每个期限显示少亏、少赚、费用和净差（美元）。</p>
+<p id="forwardNote"></p><div class="tablewrap"><table><thead><tr><th>提示（美东）</th><th>最早模拟成交</th><th>卖出股数</th><th>模拟卖价</th><th>卖出金额</th><th>后续模拟买回价</th><th>15 分钟后</th><th>当日收盘</th></tr></thead><tbody id="forwardRows"></tbody></table></div></section>
+<p class="foot">运行对应的盘中模式后，本地启动版每 10 秒检查报告。直接打开网页时可手动读取 latest.json。</p><div class="import"><label>读取本地信号文件<input type="file" id="signalFile" accept=".json,application/json"></label><button id="resume">返回自动读取</button></div></section>
 <section id="account" hidden><div class="heading"><div><h1>uSMART 账户</h1><p>正式账户的资产、持仓、盈亏和订单将在此展示。</p></div></div><section class="panel pending"><span class="badge pale">等待 API</span><h2>账户尚未连接</h2><p>待正式只读 API 接入并完成账户对账后启用。当前可在「策略回放」查看模拟交易，在「盘中分析与决策」查看信号和校验结果。</p></section></section>
 <p id="error" role="alert" hidden></p></main></body></html>

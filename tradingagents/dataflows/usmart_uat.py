@@ -19,7 +19,7 @@ import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from tradingagents.dataflows.intraday import IntradayDataError, snapshot_from_bars
+from tradingagents.dataflows.intraday import IntradayDataError, snapshot_from_bars, snapshots_from_pair
 
 LOGIN = '/user-server/open-api/login'
 QUOTES = '/quotes-openservice/api/v1/realtime'
@@ -180,3 +180,10 @@ class UatMinuteProvider:
             raise IntradayDataError('UAT 标的分钟线未提供')
         snap = snapshot_from_bars(ticker, self.frames[ticker], self.clock())
         return replace(snap, source=SOURCE)
+
+    def paired(self, ticker, proxy):
+        self.calls.extend((ticker, proxy))
+        if ticker not in self.frames or proxy not in self.frames:
+            raise IntradayDataError("UAT 双标的分钟线未提供")
+        aligned=snapshots_from_pair({symbol:self.frames[symbol] for symbol in (ticker,proxy)},self.clock())
+        return [replace(snap,source=SOURCE) for snap in aligned]

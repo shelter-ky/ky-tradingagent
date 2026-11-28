@@ -1,7 +1,7 @@
-# Modified for KY TradingAgent 0.0.1 (2026-11-23).
+# Modified for KY TradingAgent 0.0.2 (2026-11-28).
 """TradingAgents: multi-agent LLM financial trading framework."""
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 from dotenv import find_dotenv, load_dotenv
 

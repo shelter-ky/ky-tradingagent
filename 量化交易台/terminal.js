@@ -10,7 +10,7 @@ const notes = ["首日以可用整股买入，后续持有，现金分红留在�
  "沿用早盘规则。收盘前10分钟若 QQQ 含息跌幅达到1%且低于日内均价，减掉约一半现有股数。"];
 const data = window.REPLAY;
 const state = {day:0,metric:"nav",range:"all",page:0,hover:null,view:"replay"};
-const signalState = {manual:false,payload:null,note:"",sequence:0};
+const signalState = {manual:false,payload:null,note:"",sequence:0,request:null};
 const hosted = location.protocol==="http:" && location.hostname==="127.0.0.1";
 const pageSize=8;
 let playback=null;
@@ -34,9 +34,22 @@ function colored(node,value,formatted){
   node.textContent=formatted;node.classList.toggle("up",value>0);node.classList.toggle("down",value<0);
 }
 function activeAccount(){return data.symbols[$("symbol").value][$("strategy").value];}
-function riskSeries(rows){
+const replaySeries = new WeakMap();
+function accountSeries(account){
+  if(replaySeries.has(account))return replaySeries.get(account);
+  const series={nav:[],dd:[],maxDrawdown:[]};
   let peak=data.initial;
-  return rows.map(row=>{peak=Math.max(peak,row[0]);return row[0]/peak-1;});
+  let worst=0;
+  for(const [equity] of account.daily){
+    peak=Math.max(peak,equity);
+    const drawdown=equity/peak-1;
+    worst=Math.max(worst,-drawdown);
+    series.nav.push(equity);
+    series.dd.push(drawdown);
+    series.maxDrawdown.push(worst);
+  }
+  replaySeries.set(account,series);
+  return series;
 }
 function dayIndex(value){
   let lo=0,hi=data.dates.length;
@@ -69,12 +82,19 @@ function drawChart(){
   const canvas=$("chart"),rect=canvas.getBoundingClientRect(),ctx=canvas.getContext("2d");
   if(rect.width<20)return;
   const w=rect.width,h=rect.height,scale=window.devicePixelRatio||1;
-  canvas.width=Math.round(w*scale);canvas.height=Math.round(h*scale);ctx.scale(scale,scale);
+  const width=Math.round(w*scale),height=Math.round(h*scale);
+  if(canvas.width!==width)canvas.width=width;
+  if(canvas.height!==height)canvas.height=height;
+  ctx.setTransform(scale,0,0,scale,0,0);ctx.clearRect(0,0,w,h);ctx.lineWidth=1;
   const first=state.range==="all"?0:Math.max(0,state.day-Number(state.range)+1);
-  const selected=activeAccount().daily.slice(0,state.day+1),hold=data.symbols[$("symbol").value][0].daily.slice(0,state.day+1);
-  const series=[selected,hold].map(rows=>(state.metric==="nav"?rows.map(r=>r[0]):riskSeries(rows)).slice(first));
+  const hold=data.symbols[$("symbol").value][0];
+  const series=[accountSeries(activeAccount())[state.metric],accountSeries(hold)[state.metric]];
   const format=state.metric==="nav"?money:pct;
-  let min=Math.min(...series[0],...series[1]),max=Math.max(...series[0],...series[1]);
+  let min=Infinity,max=-Infinity;
+  for(let i=first;i<=state.day;i++){
+    min=Math.min(min,series[0][i],series[1][i]);
+    max=Math.max(max,series[0][i],series[1][i]);
+  }
   const pad=(max-min)*.08||(state.metric==="nav"?1:.01);min-=pad;max+=pad;
   if(state.metric==="dd")max=0;
   const left=w<480?54:66,right=w-10,top=11,bottom=h-28,span=state.day-first;
@@ -88,8 +108,10 @@ function drawChart(){
   }
   for(const k of [1,0]){
     ctx.strokeStyle=k?"#778ca2":"#007966";ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=k?1.6:2.2;ctx.setLineDash(k?[5,3]:[]);
-    ctx.beginPath();series[k].forEach((v,i)=>{if(i===0)ctx.moveTo(x(i),y(v));else ctx.lineTo(x(i),y(v));});ctx.stroke();
-    if(!span){ctx.beginPath();ctx.arc(left,y(series[k][0]),3,0,Math.PI*2);ctx.fill();}
+    ctx.beginPath();ctx.moveTo(x(0),y(series[k][first]));
+    for(let i=first+1;i<=state.day;i++)ctx.lineTo(x(i-first),y(series[k][i]));
+    ctx.stroke();
+    if(!span){ctx.beginPath();ctx.arc(left,y(series[k][first]),3,0,Math.PI*2);ctx.fill();}
   }
   ctx.setLineDash([]);ctx.fillStyle="#50656e";ctx.textAlign="left";ctx.fillText(data.dates[first],left,h-5);
   if(span){ctx.textAlign="right";ctx.fillText(data.dates[state.day],right,h-5);}
@@ -97,7 +119,7 @@ function drawChart(){
   if(state.hover!==null){
     const px=x(focus-first);ctx.strokeStyle="#57737e";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
   }
-  $("chartReadout").textContent=data.dates[focus]+"　策略 "+format(series[0][focus-first])+"　持有 "+format(series[1][focus-first]);
+  $("chartReadout").textContent=data.dates[focus]+"　策略 "+format(series[0][focus])+"　持有 "+format(series[1][focus]);
   canvas.dataset.first=first;canvas.dataset.left=left;canvas.dataset.right=right;
   canvas.setAttribute("aria-label","所选策略和直接持有的"+(state.metric==="nav"?"收盘净值":"收盘回撤")+"，截至 "+data.dates[state.day]);
 }
@@ -105,13 +127,13 @@ function draw(){
   const rule=Number($("strategy").value),account=activeAccount(),i=state.day;
   const [equity,cash,qty,close,owed,unrealized]=account.daily[i];
   const prev=i?account.daily[i-1][0]:data.initial;
-  const dd=riskSeries(account.daily.slice(0,i+1));
+  const series=accountSeries(account);
   const [vxn,median,pre,prefix,minutes]=data.market[i],targets=account.targets[i];
   $("equity").textContent=money(equity);
   colored($("net"),equity-data.initial,"累计 "+signed(equity/data.initial-1,pct));
   colored($("dayPnl"),equity-prev,signed(equity-prev,money));$("dayPct").textContent="当日 "+signed(equity/prev-1,pct);
   $("exposure").textContent=pct(qty*close/equity);$("shares").textContent=qty+" 股 · "+$("symbol").value;
-  $("maxdd").textContent=pct(-Math.min(...dd));$("draw").textContent="当前回撤 "+pct(Math.abs(dd[i]));
+  $("maxdd").textContent=pct(series.maxDrawdown[i]);$("draw").textContent="当前回撤 "+pct(Math.abs(series.dd[i]));
   $("logic").textContent=notes[rule];
   const target=rule===2?"早盘 "+pct(targets[0])+" ／ 突破 "+pct(targets[1]):pct(targets[0]);
   const fields=[["规则目标仓位",target],["可用模拟现金",money(cash)],["收盘价 ／ 持仓市值",money(close)+" ／ "+money(qty*close)],["持仓浮动盈亏（含息）",signed(unrealized,money)]];
@@ -148,6 +170,12 @@ function showSellRisk(report,active){
   const body=$("sellRows"),history=$("sellHistory"),status=$("sellStatus"),note=$("sellNote"),preNote=$("preNote");
   body.replaceChildren();history.hidden=true;preNote.hidden=true;
   if(!report){status.textContent="等待报告";note.textContent="读取盘中报告后展示本轮风险观察。";return;}
+  if(report.strategy_id==="opening0935-v1"){
+    const decision=report.opening;
+    status.textContent=(active?"":"存档 · ")+(decision?"09:35 目标":"等待判断");
+    note.textContent=decision?`参考目标 ${pct(decision.previous)} → ${pct(decision.target)}；${decision.vxn_date} VXN ${decision.vxn}，此前 20 日中位数 ${decision.median}。盘前 ${({WEAK:"双弱",MISSING:"缺失，按回退规则",STRONG:"双强",MIXED:"方向不一致"})[decision.pre]||"未知"}。`:report.reason;
+    return;
+  }
   const archived=active?"":"存档 · ";
   if(report.status!=="READY"){
     status.textContent="等待判断";note.textContent=report.reason||"等待完整且同步的分钟行情。";return;
@@ -183,19 +211,41 @@ function showSellRisk(report,active){
 
 function showSizing(report,active){
   const sizing=report?.sizing;
-  const labels={NEEDS_INPUT:"待补资料",UNSUPPORTED:"暂不支持",BLOCKED:"未通过"};
+  const labels={NEEDS_INPUT:"待补资料",UNSUPPORTED:"暂不支持",BLOCKED:"未通过",CHECKS_PASSED:"快照校验通过",NO_CHANGE:"无需调整",WAITING:"等待有效目标"};
   $("sizingStatus").textContent=!report?"等待报告":(active?"":"存档 · ")+(labels[sizing?.status]||"无可用校验结果");
   $("sizingNote").textContent=report?(sizing?.reason||"这份报告未提供盘中仓位校验说明。"):"读取盘中报告后展示账户及风险参数的校验状态。";
   const missing=Array.isArray(sizing?.missing)?sizing.missing.filter(v=>typeof v==="string").map(v=>riskFields[v]||v):[];
-  pairs($("sizingRows"),missing.length?[["待补项目",missing.join("、")]]:[]);
+  const fields=missing.length?[["待补项目",missing.join("、")]]:[];
+  const alloc=sizing?.validated_allocation;
+  if(active&&sizing?.status==="CHECKS_PASSED"&&alloc){
+    fields.push(["快照持有／可卖",sizing.held+" ／ "+sizing.available+" 股"],["拟变动／变动后",alloc.delta_quantity+" ／ "+alloc.target_quantity+" 股"]);
+  }
+  pairs($("sizingRows"),fields);
 }
 
+const etFormatter=new Intl.DateTimeFormat("zh-CN",{timeZone:"America/New_York",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+const eastern=value=>Number.isFinite(Date.parse(value))?etFormatter.format(Date.parse(value)):"—";
+function showForward(report){
+  const body=$("forwardRows");body.replaceChildren();
+  const events=Array.isArray(report?.forward_events)?report.forward_events:[];
+  $("forwardNote").textContent=report?.forward_note||"";
+  const outcome=r=>r&&[r.avoided,r.missed,r.fees,r.net].every(Number.isFinite)?
+    `少亏 ${money(r.avoided)} ／ 少赚 ${money(r.missed)} ／ 费用 ${money(r.fees)} ／ 净差 ${signed(r.net,money)}`:"待核对";
+  for(const e of events.filter(e=>e&&typeof e==="object")){
+    tableRow(body,[eastern(e.signal),eastern(e.earliest),e.qty??"—",Number.isFinite(e.fill)?money(e.fill):"—",
+      Number.isFinite(e.qty)&&Number.isFinite(e.fill)?money(e.qty*e.fill):"—",
+      Number.isFinite(e.buy_price)?money(e.buy_price):"—",e.short_horizon?"收盘前不足 15 分钟":e.after15_result?outcome(e.after15_result):e.gap||"待核对",
+      e.closing_result?outcome(e.closing_result):e.gap||"待核对"]);
+  }
+  if(!body.rows.length)emptyRow(body,8,"暂无已记录的前向减仓事件");
+}
 function renderSignal(){
   const report=signalState.payload;
+  showForward(report);
   $("signalSource").textContent=signalState.note;
   $("signalStatus").textContent="等待信号";$("signalReason").textContent="";$("signalDetails").replaceChildren();
   const body=$("signalsTable");body.replaceChildren();
-  if(!report){emptyRow(body,6,"暂无可读取的分钟行情");showSellRisk(null,false);showSizing(null,false);return;}
+  if(!report){emptyRow(body,7,"暂无可读取的分钟行情");showSellRisk(null,false);showSizing(null,false);return;}
   const stamp=Date.parse(report.generated_at),until=Date.parse(report.valid_until),now=Date.now();
   signalState.nextBoundary=stamp>now?stamp:until>now?until:Infinity;
   const active=report.status==="READY"&&report.session==="REGULAR"&&stamp<=now&&until>now;
@@ -206,8 +256,8 @@ function renderSignal(){
   pairs($("signalDetails"),[["报告标的",report.ticker],["生成时间（北京时间）",formatTime(stamp)],
       ["有效至（北京时间）",Number.isFinite(until)?formatTime(until):"无有效信号"],["分钟数据",active?"报告有效期内":"存档快照"]]);
   const num=v=>typeof v==="number"&&Number.isFinite(v)?v.toFixed(2):"—";
-  for(const s of report.snapshots)tableRow(body,[s.ticker,num(s.price),num(s.vwap),num(s.ema9),num(s.ema20),num(s.momentum5_pct)+(Number.isFinite(s.momentum5_pct)?"%":"")]);
-  if(!report.snapshots.length)emptyRow(body,6,"本轮信号没有完整行情");
+  for(const s of report.snapshots)tableRow(body,[s.ticker,eastern(s.bar_end),num(s.price),num(s.vwap),num(s.ema9),num(s.ema20),num(s.momentum5_pct)+(Number.isFinite(s.momentum5_pct)?"%":"")]);
+  if(!report.snapshots.length)emptyRow(body,7,"本轮信号没有完整行情");
 }
 function acceptSignal(r){
   if(!r||r.version!=="intraday-v1"||r.ticker!==$("signalSymbol").value||!Object.hasOwn(actions,r.action)||
@@ -216,44 +266,59 @@ function acceptSignal(r){
   signalState.payload=r;
 }
 async function refreshSignal(){
-  if(state.view!=="signals"||signalState.manual)return;
-  const serial=++signalState.sequence,symbol=$("signalSymbol").value;
+  if(state.view!=="signals"||signalState.manual||signalState.request)return;
   if(!hosted){signalState.note="直接打开模式 · 可在下方选择 Agent 的 latest.json 文件";renderSignal();return;}
+  const serial=signalState.sequence,symbol=$("signalSymbol").value;
+  const request=new AbortController();
+  signalState.request=request;
+  const timeout=setTimeout(()=>request.abort(),30000);
   try{
-    const response=await fetch("/signal/"+symbol,{cache:"no-store"});
+    const strategy=$("signalStrategy").value;
+    const response=await fetch("/signal/"+symbol+(strategy==="intraday"?"":"?strategy="+strategy),{cache:"no-store",signal:request.signal});
     if(!response.ok)throw Error();
     const result=await response.json();if(serial!==signalState.sequence)return;
     signalState.payload=null;
     if(result.report)acceptSignal(result.report);
     signalState.note=result.report?"本地自动读取 · 每 10 秒检查":"本地自动读取 · 未找到该标的已完成的盘中报告";
   }catch{if(serial!==signalState.sequence)return;signalState.payload=null;signalState.note="本轮读取失败，等待下一次刷新。";}
+  finally{
+    clearTimeout(timeout);
+    if(signalState.request===request)signalState.request=null;
+  }
   renderSignal();
 }
+function supersedeSignalRead(){
+  signalState.sequence++;
+  signalState.request?.abort();
+  signalState.request=null;
+}
 function autoSignal(){
-  signalState.sequence++;signalState.manual=false;signalState.payload=null;signalState.note="正在检查本地报告";
+  supersedeSignalRead();signalState.manual=false;signalState.payload=null;signalState.note="正在检查本地报告";
   $("signalFile").value="";renderSignal();refreshSignal();
 }
 for(const button of document.querySelectorAll("nav button"))button.onclick=()=>{
   stopPlayback();
   state.view=button.dataset.view;
+  if(state.view!=="signals"&&signalState.request)supersedeSignalRead();
   for(const item of document.querySelectorAll("nav button")){
     const selected=item===button;item.setAttribute("aria-pressed",String(selected));$(item.dataset.view).hidden=!selected;
   }
   if(state.view==="signals"){renderSignal();refreshSignal();}else if(state.view==="replay")drawChart();
 };
-$("signalSymbol").onchange=autoSignal;$("resume").onclick=autoSignal;
+$("signalSymbol").onchange=autoSignal;$("signalStrategy").onchange=autoSignal;$("resume").onclick=autoSignal;
 $("signalFile").onchange=async event=>{
   const file=event.target.files[0];if(!file)return;
-  const serial=++signalState.sequence;signalState.manual=true;signalState.payload=null;
+  supersedeSignalRead();
+  const serial=signalState.sequence;signalState.manual=true;signalState.payload=null;
   signalState.note="正在读取本地报告";renderSignal();
   try{
     if(file.size>2_000_000)throw Error();
     const value=JSON.parse(await file.text());if(serial!==signalState.sequence)return;
-    acceptSignal(value);signalState.note="手动读取 · "+file.name;
+    acceptSignal(value);$("signalStrategy").value=value.strategy_id==="opening0935-v1"?"opening0935":"intraday";signalState.note="手动读取 · "+file.name;
   }catch{if(serial!==signalState.sequence)return;signalState.note="请选择与标的一致的 Agent 盘中 JSON 报告。";}
   renderSignal();
 };
-setInterval(refreshSignal,10000);
+if(hosted)setInterval(refreshSignal,10000);
 setInterval(()=>{if(state.view==="signals"&&signalState.payload&&Date.now()>=signalState.nextBoundary)renderSignal();},1000);
 if(data){
   state.day=data.dates.length-1;
@@ -276,7 +341,8 @@ if(data){
   groupSwitch("range","range");groupSwitch("metric","metric");
   $("chart").onpointermove=e=>{
     const c=$("chart"),a=Number(c.dataset.first),left=Number(c.dataset.left),right=Number(c.dataset.right);
-    state.hover=a+Math.round((e.clientX-c.getBoundingClientRect().left-left)/(right-left)*(state.day-a));drawChart();
+    const hover=Math.min(state.day,Math.max(a,a+Math.round((e.clientX-c.getBoundingClientRect().left-left)/(right-left)*(state.day-a))));
+    if(hover!==state.hover){state.hover=hover;drawChart();}
   };
   $("chart").onpointerleave=()=>{state.hover=null;drawChart();};
   new ResizeObserver(drawChart).observe($("chart"));draw();
